@@ -1,1 +1,1 @@
-worker: python arch_checker.py
+web: python arch_checker.py
