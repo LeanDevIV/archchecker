@@ -8,14 +8,27 @@ import threading
 import os
 
 # --- CONFIGURACIÓN ---
-load_dotenv()
-TOKEN = os.getenv('TELEGRAM_TOKEN')
-try:
-    USUARIO_ID = int(os.getenv('MY_CHAT_ID'))
-except (TypeError, ValueError):
-    USUARIO_ID = 0
-USUARIOS_PERMITIDOS = [USUARIO_ID]
+# Carga el .env solo si existe (para local), si no, usa las del sistema (para Koyeb)
+dotenv_path = os.path.join(os.path.dirname(__file__), '.env')
+if os.path.isfile(dotenv_path):
+    load_dotenv(dotenv_path)
 
+TOKEN = os.getenv('TELEGRAM_TOKEN')
+raw_id = os.getenv('MY_CHAT_ID')
+
+# Verificación extra para depurar
+if not TOKEN:
+    print("❌ ERROR: TELEGRAM_TOKEN no detectado en el entorno.")
+if not raw_id:
+    print("❌ ERROR: MY_CHAT_ID no detectado en el entorno.")
+
+try:
+    USUARIO_ID = int(raw_id) if raw_id else 0
+except ValueError:
+    print(f"❌ ERROR: MY_CHAT_ID tiene un formato inválido: {raw_id}")
+    USUARIO_ID = 0
+
+USUARIOS_PERMITIDOS = [USUARIO_ID]
 def ejecutar_comando(comando):
     try:
         r = subprocess.run(comando, capture_output=True, text=True, shell=False)
