@@ -46,16 +46,27 @@ def obtener_novedades_oficiales():
         feed = feedparser.parse("https://archlinux.org/feeds/packages/")
         if not feed.entries: return "No hay novedades ahora mismo."
         
-        rep = "🌐 *ÚLTIMOS PAQUETES EN REPOS*\n\n"
+        rep = "🌐 *ÚLTIMOS REPOS OFICIALES*\n\n"
+        
+        # Palabras clave para categorizar
+        core = ['linux', 'grub', 'systemd', 'pacman', 'glibc']
+        gfx = ['nvidia', 'mesa', 'wayland', 'xorg', 'vulkan']
+
         for e in feed.entries[:3]:
-            # Extraemos el nombre antes del espacio (ej: 'python-tensorflow 2.15...')
             full_title = e.title.split(' ')[0]
             descripcion = explicar_paquete(full_title)
             
-            rep += f"📦 *{e.title}*\n📝 _{descripcion}_\n\n"
+            # Elegimos el emoji según el nivel de importancia
+            emoji = "🔹"
+            if any(k in full_title.lower() for k in core):
+                emoji = "🔴 *SISTEMA*"
+            elif any(k in full_title.lower() for k in gfx):
+                emoji = "🎮 *GRÁFICOS*"
+            
+            rep += f"{emoji} *{e.title}*\n📝 _{descripcion}_\n\n"
         return rep
     except Exception as e: 
-        return f"❌ Error al procesar feed: {e}"
+        return f"❌ Error: {e}"
 
 # --- MANEJADORES ---
 
