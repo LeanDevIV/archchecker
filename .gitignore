@@ -1,0 +1,10 @@
+# Secretos y configuración
+.env
+
+# Entorno virtual
+venv/
+__pycache__/
+*.pyc
+
+# Reportes locales
+reporte_actualizaciones_*.txt
