@@ -27,19 +27,21 @@ def run_web_app():
 
 # --- PROCESADOR DE PAQUETES ---
 
-def explicar_paquete(nombre_pkg):
-    """Consulta la API oficial de Arch para traer la descripción"""
-    # Intentamos limpiar la versión del nombre para la API
-    # Si el título es 'linux 6.12.arch1-1 (core)', extraemos 'linux'
-    url = f"https://archlinux.org/rpc/packages/details/{nombre_pkg}/"
+def explicar_paquete(nombre_full):
+    # Limpiamos el nombre: tomamos solo la primera parte antes del espacio
+    # y antes de cualquier guion que separe la versión.
+    nombre_limpio = nombre_full.split(' ')[0].split('-')[0]
+    
+    url = f"https://archlinux.org/rpc/packages/details/{nombre_limpio}/"
     try:
         r = requests.get(url, timeout=5)
         if r.status_code == 200:
             data = r.json()
-            return data.get('desc', 'Sin descripción disponible.')
+            desc = data.get('desc', 'Sin descripción.')
+            return (desc[:120] + '...') if len(desc) > 120 else desc
     except:
         pass
-    return "Info técnica no disponible en este momento."
+    return "Info técnica no disponible."
 
 def obtener_novedades_oficiales():
     try:
