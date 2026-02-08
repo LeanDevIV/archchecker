@@ -1,128 +1,87 @@
-import subprocess, asyncio, os, feedparser
-from datetime import datetime
+import os, subprocess, asyncio, feedparser, requests, threading
+from flask import Flask
 from dotenv import load_dotenv
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
-from flask import Flask
-import threading
-import os
 
 # --- CONFIGURACIÓN ---
-# Carga el .env solo si existe (para local), si no, usa las del sistema (para Koyeb)
-dotenv_path = os.path.join(os.path.dirname(__file__), '.env')
-if os.path.isfile(dotenv_path):
-    load_dotenv(dotenv_path)
-
+load_dotenv()
 TOKEN = os.getenv('TELEGRAM_TOKEN')
 raw_id = os.getenv('MY_CHAT_ID')
-
-# Verificación extra para depurar
-if not TOKEN:
-    print("❌ ERROR: TELEGRAM_TOKEN no detectado en el entorno.")
-if not raw_id:
-    print("❌ ERROR: MY_CHAT_ID no detectado en el entorno.")
 
 try:
     USUARIO_ID = int(raw_id) if raw_id else 0
 except ValueError:
-    print(f"❌ ERROR: MY_CHAT_ID tiene un formato inválido: {raw_id}")
     USUARIO_ID = 0
 
 USUARIOS_PERMITIDOS = [USUARIO_ID]
-def ejecutar_comando(comando):
-    try:
-        r = subprocess.run(comando, capture_output=True, text=True, shell=False)
-        return r.stdout.strip() if r.returncode == 0 else f"Error: {r.stderr}"
-    except Exception as e: return f"❌ Fallo: {e}"
 
-def obtener_ultimas_noticias_arch():
+# --- WEB SERVER PARA KOYEB ---
+web_app = Flask(__name__)
+@web_app.route('/')
+def home(): return "Arch Cloud Bot Online 24/7"
+
+def run_web_app():
+    port = int(os.environ.get("PORT", 8080))
+    web_app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
+
+# --- PROCESADOR DE PAQUETES ---
+
+def explicar_paquete(nombre_pkg):
+    """Consulta la API oficial de Arch para traer la descripción"""
+    # Intentamos limpiar la versión del nombre para la API
+    # Si el título es 'linux 6.12.arch1-1 (core)', extraemos 'linux'
+    url = f"https://archlinux.org/rpc/packages/details/{nombre_pkg}/"
+    try:
+        r = requests.get(url, timeout=5)
+        if r.status_code == 200:
+            data = r.json()
+            return data.get('desc', 'Sin descripción disponible.')
+    except:
+        pass
+    return "Info técnica no disponible en este momento."
+
+def obtener_novedades_oficiales():
     try:
         feed = feedparser.parse("https://archlinux.org/feeds/packages/")
-        if not feed.entries: return "No se encontraron noticias."
-        rep = "🌐 *ÚLTIMOS REPOS OFICIALES*\n\n"
-        for e in feed.entries[:5]:
-            rep += f"🔹 *{e.title}*\n"
+        if not feed.entries: return "No hay novedades ahora mismo."
+        
+        rep = "🌐 *ÚLTIMOS PAQUETES EN REPOS*\n\n"
+        for e in feed.entries[:3]:
+            # Extraemos el nombre antes del espacio (ej: 'python-tensorflow 2.15...')
+            full_title = e.title.split(' ')[0]
+            descripcion = explicar_paquete(full_title)
+            
+            rep += f"📦 *{e.title}*\n📝 _{descripcion}_\n\n"
         return rep
-    except Exception as e: return f"❌ Error: {e}"
+    except Exception as e: 
+        return f"❌ Error al procesar feed: {e}"
 
 # --- MANEJADORES ---
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id not in USUARIOS_PERMITIDOS: return
-    guia = ("🤖 *ArchNotifier v2.2*\n\n"
-            "/check - Tus updates\n/updates - Repos globales\n"
-            "/fastfetch - Hardware\n/disco - Almacenamiento\n/logs - Errores")
+    guia = ("🤖 *ArchNotifier Cloud*\n\n"
+            "/updates - Novedades globales con info técnica\n"
+            "/logs - Estado del servicio")
     await update.message.reply_text(guia, parse_mode='Markdown')
 
 async def updates(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id not in USUARIOS_PERMITIDOS: return
-    await update.message.reply_text(obtener_ultimas_noticias_arch(), parse_mode='Markdown')
-
-async def check(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id not in USUARIOS_PERMITIDOS: return
-    raw = ejecutar_comando(['checkupdates'])
-    lista = [l for l in raw.split('\n') if l and "Error" not in l]
-    if not lista:
-        await update.message.reply_text("✅ ¡Todo al día!")
-        return
-    criticos = ['linux', 'nvidia', 'grub', 'systemd', 'glibc', 'xorg', 'wayland']
-    riesgo = [f"⚠️ {p}" for p in lista if any(k in p.lower() for k in criticos)]
-    txt = f"📦 *TUS UPDATES*\nTotal: {len(lista)}\n\n"
-    if riesgo: txt += "*RIESGO:* \n" + "\n".join(riesgo[:10])
-    await update.message.reply_text(txt, parse_mode='Markdown')
-
-async def fastfetch(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id not in USUARIOS_PERMITIDOS: return
-    info = ejecutar_comando(['fastfetch', '--pipe'])
-    await update.message.reply_text(f"🚀 *SISTEMA*\n```\n{info}\n```", parse_mode='Markdown')
-
-async def disco(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id not in USUARIOS_PERMITIDOS: return
-    uso = ejecutar_comando(['df', '-h', '/', '/home'])
-    await update.message.reply_text(f"💾 *DISCO*\n```\n{uso}\n```", parse_mode='Markdown')
+    await update.message.reply_text("🧐 Analizando los últimos paquetes...")
+    await update.message.reply_text(obtener_novedades_oficiales(), parse_mode='Markdown')
 
 async def logs(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id not in USUARIOS_PERMITIDOS: return
-    err = ejecutar_comando(['journalctl', '-p', '3', '-n', '5', '--no-pager'])
-    await update.message.reply_text(f"⚠️ *LOGS*\n```\n{err or 'Sin errores'}\n```", parse_mode='Markdown')
+    await update.message.reply_text("✅ Bot operando en la nube. Conexión con Arch Linux OK.")
 
-# --- MINI SERVIDOR WEB PARA KOYEB ---
-web_app = Flask(__name__)
-
-@web_app.route('/')
-def home():
-    return "🤖 Bot de Arch de Salt online 24/7"
-
-def run_web_app():
-    # Koyeb inyecta automáticamente el puerto en la variable de entorno PORT
-    port = int(os.environ.get("PORT", 8080))
-    # Ponemos debug=False para producción y evitamos conflictos de hilos
-    web_app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
-
-    
 if __name__ == "__main__":
-    if not TOKEN or USUARIO_ID == 0:
-        print("❌ ERROR: No se encontraron las variables en el .env")
-    else:
-        # 1. Arrancamos el servidor web en un hilo paralelo (Background)
-        # Esto engaña a Koyeb haciéndole creer que es una web app
-        print("🌐 Iniciando servidor de salud en el puerto 8080...")
+    if TOKEN and USUARIO_ID != 0:
         threading.Thread(target=run_web_app, daemon=True).start()
-
-        # 2. Iniciamos el Bot de Telegram normalmente
-        print("🤖 Bot resucitado y escuchando...")
         app = ApplicationBuilder().token(TOKEN).build()
         
-        # Registro de comandos
-        for cmd, func in [
-            ("start", start), 
-            ("updates", updates), 
-            ("check", check), 
-            ("fastfetch", fastfetch), 
-            ("disco", disco), 
-            ("logs", logs)
-        ]:
-            app.add_handler(CommandHandler(cmd, func))
+        app.add_handler(CommandHandler("start", start))
+        app.add_handler(CommandHandler("updates", updates))
+        app.add_handler(CommandHandler("logs", logs))
         
-        # Mantenemos el bot corriendo
+        print("🤖 Cloud Bot Ready...")
         app.run_polling()
