@@ -1,0 +1,1 @@
+worker: python arch_checker.py

@@ -3,6 +3,9 @@ from datetime import datetime
 from dotenv import load_dotenv
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
+from flask import Flask
+import threading
+import os
 
 # --- CONFIGURACIÓN ---
 load_dotenv()
@@ -70,10 +73,43 @@ async def logs(update: Update, context: ContextTypes.DEFAULT_TYPE):
     err = ejecutar_comando(['journalctl', '-p', '3', '-n', '5', '--no-pager'])
     await update.message.reply_text(f"⚠️ *LOGS*\n```\n{err or 'Sin errores'}\n```", parse_mode='Markdown')
 
+# --- MINI SERVIDOR WEB PARA KOYEB ---
+web_app = Flask(__name__)
+
+@web_app.route('/')
+def home():
+    return "🤖 Bot de Arch de Salt online 24/7"
+
+def run_web_app():
+    # Koyeb inyecta automáticamente el puerto en la variable de entorno PORT
+    port = int(os.environ.get("PORT", 8080))
+    # Ponemos debug=False para producción y evitamos conflictos de hilos
+    web_app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
+
+    
 if __name__ == "__main__":
-    if TOKEN and USUARIO_ID != 0:
+    if not TOKEN or USUARIO_ID == 0:
+        print("❌ ERROR: No se encontraron las variables en el .env")
+    else:
+        # 1. Arrancamos el servidor web en un hilo paralelo (Background)
+        # Esto engaña a Koyeb haciéndole creer que es una web app
+        print("🌐 Iniciando servidor de salud en el puerto 8080...")
+        threading.Thread(target=run_web_app, daemon=True).start()
+
+        # 2. Iniciamos el Bot de Telegram normalmente
+        print("🤖 Bot resucitado y escuchando...")
         app = ApplicationBuilder().token(TOKEN).build()
-        for cmd, func in [("start", start), ("updates", updates), ("check", check), 
-                          ("fastfetch", fastfetch), ("disco", disco), ("logs", logs)]:
+        
+        # Registro de comandos
+        for cmd, func in [
+            ("start", start), 
+            ("updates", updates), 
+            ("check", check), 
+            ("fastfetch", fastfetch), 
+            ("disco", disco), 
+            ("logs", logs)
+        ]:
             app.add_handler(CommandHandler(cmd, func))
-        print("🤖 Bot online..."); app.run_polling()
+        
+        # Mantenemos el bot corriendo
+        app.run_polling()
