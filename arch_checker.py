@@ -18,41 +18,75 @@ except ValueError:
     USUARIO_ID = 0
 
 USUARIOS_PERMITIDOS = [USUARIO_ID]
-
-# Variable global para evitar spam de noticias repetidas
 ultima_noticia_id = None
 
-# --- WEB SERVER PARA KOYEB (Health Check) ---
+# --- WEB SERVER (Koyeb Keep-Alive) ---
 web_app = Flask(__name__)
 @web_app.route('/')
-def home(): return "Arch Cloud Bot Online 24/7"
+def home(): return "Arch Cloud Bot v5.0 Online"
 
 def run_web_app():
     port = int(os.environ.get("PORT", 8080))
     web_app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
 
-# --- PROCESADOR DE IA ---
+# --- LÓGICA DE SEMÁFORO Y IA ---
 
-def explicar_con_ia(nombre_pkg, profundo=False):
-    """Maneja tanto explicaciones breves como consultas profundas"""
-    prompt = "Sos un experto en Arch Linux. Explicá brevemente (15 palabras) qué hace este paquete."
-    if profundo:
-        prompt = "Sos un experto senior en Arch Linux. Respondé de forma concisa y técnica. Máximo 300 palabras. Usá Markdown."
+def clasificar_riesgo(pkg_name):
+    """Devuelve un emoji según la importancia del paquete"""
+    nombre = pkg_name.lower()
     
+    # 🔴 CRÍTICO: Si se rompe esto, el sistema no arranca o falla gravemente
+    criticos = ['linux', 'linux-lts', 'systemd', 'grub', 'pacman', 'glibc', 'gcc', 'filesystem']
+    if any(c in nombre for c in criticos):
+        return "🔴"
+    
+    # 🟡 PRECAUCIÓN: Gráficos y entornos de escritorio
+    medios = ['nvidia', 'mesa', 'wayland', 'xorg', 'plasma', 'gnome', 'qt', 'gtk', 'pipewire']
+    if any(m in nombre for m in medios):
+        return "🟡"
+        
+    # 🟢 SEGURO: Aplicaciones y librerías menores
+    return "🟢"
+
+def consultar_ia(prompt_usuario, modo="breve"):
+    """
+    modo='breve': Max 300 palabras, respuesta directa.
+    modo='deep': Sin limite estricto (recortado por Telegram), razonamiento profundo.
+    """
+    sistema = "Sos un experto en Arch Linux. Sé conciso y directo."
+    if modo == "deep":
+        sistema = "Sos un ingeniero experto en Linux. Analizá paso a paso, explicá el por qué y da ejemplos técnicos. Usá Markdown."
+    else:
+        sistema += " Resumí tu respuesta en menos de 150 palabras."
+
     try:
         completion = client.chat.completions.create(
             model="llama-3.3-70b-versatile",
             messages=[
-                {"role": "system", "content": prompt},
-                {"role": "user", "content": nombre_pkg}
+                {"role": "system", "content": sistema},
+                {"role": "user", "content": prompt_usuario}
             ]
         )
         res = completion.choices[0].message.content
+        # Recorte de seguridad para Telegram (4096 chars)
         return res[:4000] if len(res) > 4000 else res
     except Exception as e:
         return f"❌ Error de IA: {e}"
 
-# --- LÓGICA DE MONITOREO AUTOMÁTICO ---
+def explicar_paquete_breve(pkg_name):
+    """Usa IA para una descripción de 1 línea en los updates"""
+    try:
+        completion = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[
+                {"role": "system", "content": "Define este paquete de Arch Linux en máximo 10 palabras."},
+                {"role": "user", "content": pkg_name}
+            ]
+        )
+        return completion.choices[0].message.content
+    except: return "Sin información."
+
+# --- MONITOREO AUTOMÁTICO ---
 
 async def verificar_noticias_automatico(context: ContextTypes.DEFAULT_TYPE):
     global ultima_noticia_id
@@ -61,87 +95,97 @@ async def verificar_noticias_automatico(context: ContextTypes.DEFAULT_TYPE):
         if not feed.entries: return
         
         nueva_entry = feed.entries[0]
-        
-        # Inicialización en el primer arranque
         if ultima_noticia_id is None:
             ultima_noticia_id = nueva_entry.id
             return
 
-        # Si el ID cambió, hay un paquete nuevo
         if nueva_entry.id != ultima_noticia_id:
             ultima_noticia_id = nueva_entry.id
             pkg_name = nueva_entry.title.split(' ')[0]
-            desc = explicar_con_ia(pkg_name)
             
-            # Alerta visual si es core/crítico
-            alertas = ['linux', 'grub', 'systemd', 'nvidia', 'pacman']
-            emoji = "📢"
-            if any(k in pkg_name.lower() for k in alertas):
-                emoji = "🚨 *¡ALERTA CRÍTICA!*"
+            emoji = clasificar_riesgo(pkg_name)
+            desc = explicar_paquete_breve(pkg_name)
             
-            mensaje = f"{emoji}\n\n📦 *{nueva_entry.title}*\n🤖 _{desc}_"
+            # Solo avisar si es crítico o medio (Opcional: quitar filtro para avisar de todo)
+            aviso = f"📢 *UPDATE DETECTADO*"
+            if emoji == "🔴": aviso = "🚨 *¡UPDATE CRÍTICO!*"
+            
+            mensaje = f"{aviso}\n\n{emoji} *{nueva_entry.title}*\n📝 _{desc}_"
             await context.bot.send_message(chat_id=USUARIO_ID, text=mensaje, parse_mode='Markdown')
     except Exception as e:
-        print(f"Error en monitoreo: {e}")
+        print(f"Error monitoreo: {e}")
 
-# --- MANEJADORES DE COMANDOS ---
+# --- COMANDOS ---
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     guia = (
-        "🤖 *ArchNotifier Cloud v4.0*\n\n"
-        "🔓 *Público:* `/ask [clave] [pregunta]`\n"
-        "🔐 *Admin:* `/updates`, `/logs`\n\n"
-        "📡 *Estado:* Monitoreo automático cada 30 min."
+        "🤖 *ArchNotifier v5.0*\n\n"
+        "🚦 *Semaforo de Riesgo:*\n"
+        "🔴 Kernel/Boot | 🟡 Drivers/GUI | 🟢 Apps\n\n"
+        "💻 *Comandos:*\n"
+        "`/updates` - Ver últimos 5 paquetes\n"
+        "`/ask [clave] [pregunta]` - Respuesta rápida\n"
+        "`/ask [clave] deep [pregunta]` - Razonamiento profundo"
     )
     await update.message.reply_text(guia, parse_mode='Markdown')
 
 async def updates(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id not in USUARIOS_PERMITIDOS: return
-    await update.message.reply_text("🧐 Analizando el feed oficial...")
-    
+    await update.message.reply_text("🚦 Analizando repositorios...", parse_mode='Markdown')
     feed = feedparser.parse("https://archlinux.org/feeds/packages/")
-    rep = "🌐 *ÚLTIMOS REPOS*\n\n"
-    for e in feed.entries[:3]:
+    rep = "🌐 *ÚLTIMOS 5 PAQUETES*\n\n"
+    
+    for e in feed.entries[:5]:
         pkg = e.title.split(' ')[0]
-        rep += f"📦 *{e.title}*\n🤖 _{explicar_con_ia(pkg)}_\n\n"
+        emoji = clasificar_riesgo(pkg)
+        desc = explicar_paquete_breve(pkg)
+        rep += f"{emoji} *{e.title}*\n|_{desc}_\n\n"
+        
     await update.message.reply_text(rep, parse_mode='Markdown')
 
 async def ask(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Validación básica de argumentos
     if not context.args or len(context.args) < 2:
-        await update.message.reply_text("🤔 `/ask [clave] [pregunta]`")
+        await update.message.reply_text("⚠️ Uso: `/ask [clave] [pregunta]` o `/ask [clave] deep [pregunta]`", parse_mode='Markdown')
         return
-    
-    if context.args[0] != BOT_SECRET:
+
+    # Validar Clave
+    clave_user = context.args[0]
+    if clave_user != BOT_SECRET:
         await update.message.reply_text("⛔ Clave incorrecta.")
         return
 
-    pregunta = " ".join(context.args[1:])
-    msg = await update.message.reply_text(f"🧠 Consultando sobre *{pregunta}*...")
-    respuesta = explicar_con_ia(pregunta, profundo=True)
+    # Lógica Deep vs Breve
+    # Chequeamos si la segunda palabra es 'deep'
+    if context.args[1].lower() == 'deep':
+        modo = "deep"
+        pregunta = " ".join(context.args[2:]) # Saltamos clave y 'deep'
+        msg_loading = "🧠 *Pensando a fondo...* (Modo Deep)"
+    else:
+        modo = "breve"
+        pregunta = " ".join(context.args[1:]) # Saltamos solo la clave
+        msg_loading = "💡 *Analizando...* (Modo Breve)"
+
+    if not pregunta:
+        await update.message.reply_text("🤔 ¿Y la pregunta?")
+        return
+
+    msg = await update.message.reply_text(msg_loading, parse_mode='Markdown')
+    respuesta = consultar_ia(pregunta, modo=modo)
     await msg.edit_text(respuesta, parse_mode='Markdown')
 
-async def logs(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id not in USUARIOS_PERMITIDOS: return
-    await update.message.reply_text("✅ Bot en Koyeb: OK\n✅ Monitoreo: Activo")
-
-# --- BLOQUE PRINCIPAL ---
+# --- MAIN ---
 
 if __name__ == "__main__":
     if TOKEN:
-        # Iniciar Flask en hilo aparte
         threading.Thread(target=run_web_app, daemon=True).start()
-        
-        # Configurar Application con JobQueue
         app = ApplicationBuilder().token(TOKEN).build()
         
-        # Tarea repetitiva: cada 3600 segundos (60 min)
+        # Monitoreo cada 1 hora (3600s)
         app.job_queue.run_repeating(verificar_noticias_automatico, interval=3600, first=10)
         
-        # Handlers
         app.add_handler(CommandHandler("start", start))
         app.add_handler(CommandHandler("updates", updates))
-        app.add_handler(CommandHandler("logs", logs))
         app.add_handler(CommandHandler("ask", ask))
         
-        print("🤖 Bot Cloud v4.0 listo. Monitoreo automático iniciado.")
+        print("🤖 Bot v5.0 (Traffic Light Edition) listo...")
         app.run_polling()
